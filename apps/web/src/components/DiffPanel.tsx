@@ -3,7 +3,13 @@ import { FileDiff, type FileDiffMetadata, Virtualizer } from "@pierre/diffs/reac
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { ThreadId, type TurnId } from "@t3tools/contracts";
-import { ChevronLeftIcon, ChevronRightIcon, Columns2Icon, Rows3Icon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  Columns2Icon,
+  Rows3Icon,
+} from "lucide-react";
 import {
   type WheelEvent as ReactWheelEvent,
   useCallback,
@@ -96,6 +102,17 @@ const DIFF_PANEL_UNSAFE_CSS = `
 }
 `;
 
+function resolveDiffPanelUnsafeCss(fileCollapsed: boolean): string {
+  if (!fileCollapsed) {
+    return DIFF_PANEL_UNSAFE_CSS;
+  }
+  return `${DIFF_PANEL_UNSAFE_CSS}
+[data-diffs-header] {
+  border-bottom-color: transparent !important;
+}
+`;
+}
+
 type RenderablePatch =
   | {
       kind: "files";
@@ -162,6 +179,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
   const { resolvedTheme } = useTheme();
   const { settings } = useAppSettings();
   const [diffRenderMode, setDiffRenderMode] = useState<DiffRenderMode>("stacked");
+  const [collapsedFileKeys, setCollapsedFileKeys] = useState<Set<string>>(() => new Set());
   const patchViewportRef = useRef<HTMLDivElement>(null);
   const turnStripRef = useRef<HTMLDivElement>(null);
   const [canScrollTurnStripLeft, setCanScrollTurnStripLeft] = useState(false);
@@ -292,6 +310,59 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       }),
     );
   }, [renderablePatch]);
+  const renderableFileKeys = useMemo(
+    () => renderableFiles.map((fileDiff) => buildFileDiffRenderKey(fileDiff)),
+    [renderableFiles],
+  );
+  const selectedFileRenderKey = useMemo(() => {
+    if (!selectedFilePath) return null;
+    const selectedFile = renderableFiles.find(
+      (fileDiff) => resolveFileDiffPath(fileDiff) === selectedFilePath,
+    );
+    return selectedFile ? buildFileDiffRenderKey(selectedFile) : null;
+  }, [renderableFiles, selectedFilePath]);
+
+  const toggleFileCollapsed = useCallback((fileKey: string) => {
+    setCollapsedFileKeys((current) => {
+      const next = new Set(current);
+      if (next.has(fileKey)) {
+        next.delete(fileKey);
+      } else {
+        next.add(fileKey);
+      }
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    const validKeys = new Set(renderableFileKeys);
+    setCollapsedFileKeys((current) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const fileKey of current) {
+        if (validKeys.has(fileKey)) {
+          next.add(fileKey);
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [renderableFileKeys]);
+
+  useEffect(() => {
+    if (!selectedFileRenderKey) {
+      return;
+    }
+    setCollapsedFileKeys((current) => {
+      if (!current.has(selectedFileRenderKey)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.delete(selectedFileRenderKey);
+      return next;
+    });
+  }, [selectedFileRenderKey]);
 
   useEffect(() => {
     if (!selectedFilePath || !patchViewportRef.current) {
@@ -561,11 +632,13 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
                   const filePath = resolveFileDiffPath(fileDiff);
                   const fileKey = buildFileDiffRenderKey(fileDiff);
                   const themedFileKey = `${fileKey}:${resolvedTheme}`;
+                  const fileCollapsed = collapsedFileKeys.has(fileKey);
+                  const fileUnsafeCss = resolveDiffPanelUnsafeCss(fileCollapsed);
                   return (
                     <div
                       key={themedFileKey}
                       data-diff-file-path={filePath}
-                      className="diff-render-file mb-2 rounded-md first:mt-2 last:mb-0"
+                      className="diff-render-file relative mb-2 rounded-md first:mt-2 last:mb-0"
                       onClickCapture={(event) => {
                         const nativeEvent = event.nativeEvent as MouseEvent;
                         const composedPath = nativeEvent.composedPath?.() ?? [];
@@ -577,14 +650,33 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
                         openDiffFileInEditor(filePath);
                       }}
                     >
+                      <button
+                        type="button"
+                        aria-expanded={!fileCollapsed}
+                        aria-label={`${fileCollapsed ? "Expand" : "Collapse"} ${filePath}`}
+                        className="absolute top-2 right-2 z-20 inline-flex items-center gap-1 rounded-md border border-border/70 bg-background/92 px-2 py-1 text-[10px] font-medium text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          toggleFileCollapsed(fileKey);
+                        }}
+                      >
+                        {fileCollapsed ? (
+                          <ChevronRightIcon className="size-3" />
+                        ) : (
+                          <ChevronDownIcon className="size-3" />
+                        )}
+                        <span>{fileCollapsed ? "Expand" : "Collapse"}</span>
+                      </button>
                       <FileDiff
                         fileDiff={fileDiff}
                         options={{
                           diffStyle: diffRenderMode === "split" ? "split" : "unified",
+                          collapsed: fileCollapsed,
                           lineDiffType: "none",
                           theme: resolveDiffThemeName(resolvedTheme),
                           themeType: resolvedTheme as DiffThemeType,
-                          unsafeCSS: DIFF_PANEL_UNSAFE_CSS,
+                          unsafeCSS: fileUnsafeCss,
                         }}
                       />
                     </div>
